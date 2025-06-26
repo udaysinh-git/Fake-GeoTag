@@ -1,0 +1,10 @@
+[project]
+name = "fake-geotag"
+version = "0.1.0"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "rich",
+    "pillow",
+    "piexif"
+]

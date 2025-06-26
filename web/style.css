@@ -1,0 +1,9 @@
+body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f6fb; margin: 0; }
+.container { max-width: 500px; margin: 2em auto; background: #fff; border-radius: 12px; box-shadow: 0 2px 16px #0001; padding: 2em; }
+h1 { text-align: center; color: #2b7a78; }
+form { display: flex; flex-direction: column; gap: 1em; }
+label { display: flex; flex-direction: column; font-weight: 500; }
+input[type="file"] { margin-top: 0.5em; }
+button { background: #2b7a78; color: #fff; border: none; border-radius: 6px; padding: 0.7em 1.2em; font-size: 1em; cursor: pointer; transition: background 0.2s; }
+button:hover { background: #205e5a; }
+#result { margin-top: 1em; text-align: center; }

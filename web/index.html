@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fake GeoTag</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        /* Ensure map screenshot is clean */
+        #map {
+            background: #e6e6e6;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Fake GeoTag</h1>
+        <form id="uploadForm">
+            <label>Photo:
+                <input type="file" name="file" accept="image/*" required>
+            </label>
+            <label>Date:
+                <input type="date" name="date" required>
+            </label>
+            <label>Time:
+                <input type="time" name="time" required>
+            </label>
+            <label>Latitude:
+                <input type="number" name="latitude" step="any" required>
+            </label>
+            <label>Longitude:
+                <input type="number" name="longitude" step="any" required>
+            </label>
+            <button type="button" id="getLocation">Use My Location</button>
+            <div id="map" style="height: 300px; margin: 1em 0;"></div>
+            <div style="font-size: 0.95em; color: #666; margin-bottom: 0.5em;">Tip: Adjust the map and marker as you want it to appear in the overlay. The map will be screenshotted and added to your photo.</div>
+            <button type="submit">Fake Metadata & Download</button>
+        </form>
+        <div id="result"></div>
+    </div>
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
