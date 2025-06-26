@@ -1,6 +1,5 @@
 from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime
-from io import BytesIO
 from typing import Optional
 import requests
 import piexif
@@ -68,64 +67,95 @@ def overlay_with_map_and_info(
     map_image_path: Optional[str] = None
 ) -> Image.Image:
     """
-    Overlay a modern, camera-style geotag card at the bottom (landscape) or side (portrait) of the image.
-    Map screenshot on left/top, weather on right/bottom, address and metadata in center.
-    Responsive for 16x9 and 9x16 images.
+    Overlay a single-row geotag card at the bottom of the image.
+    Layout: 3 columns (map | address/date/time/coords | weather)
+    Center column: address (word-wrapped), date+time below, lat+lon below.
+    Weather column: icon (smaller), temp text below icon, both centered.
+    Dynamically adapts to image aspect ratio for best fit.
     """
+    print("[DEBUG] Starting overlay_with_map_and_info")
     # --- Load map image (screenshot from frontend) ---
-    if map_image_path:
-        map_img = Image.open(map_image_path).convert("RGBA")
-    else:
+    try:
+        if map_image_path:
+            print(f"[DEBUG] Loading map image from {map_image_path}")
+            map_img = Image.open(map_image_path).convert("RGBA")
+        else:
+            print("[DEBUG] No map image path provided, using blank map")
+            map_img = Image.new("RGBA", (320, 180), (220, 220, 220, 255))
+    except Exception as e:
+        print(f"[ERROR] Loading map image failed: {e}")
         map_img = Image.new("RGBA", (320, 180), (220, 220, 220, 255))
-    # --- Get address and weather ---
+    print("[DEBUG] Map image loaded")
+    print("[DEBUG] Fetching address...")
     address = get_address(latitude, longitude)
+    print(f"[DEBUG] Address: {address}")
+    print("[DEBUG] Fetching weather...")
     weather_icon_path, temp_str = get_weather(latitude, longitude)
+    print(f"[DEBUG] Weather icon: {weather_icon_path}, Temp: {temp_str}")
     width, height = img.size
+    print(f"[DEBUG] Image size: {width}x{height}")
+
+    # Overlay dimensions
+    overlay_height = int(height * 0.22)
+    overlay = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    draw.rectangle([(0, 0), (width, overlay_height)], fill=(28, 28, 28, 210))
+    print("[DEBUG] Overlay created (rectangle)")
+
+    # --- Dynamic column widths based on aspect ratio ---
     aspect = width / height
-    # Responsive: landscape (overlay bottom), portrait (overlay right)
-    if aspect >= 1:  # Landscape (16x9, etc)
-        overlay_height = int(height * 0.28)
-        overlay = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
-        radius = overlay_height // 2
-        draw.rounded_rectangle([(0, 0), (width, overlay_height)], radius=radius, fill=(28, 28, 28, 210))
-        # --- Map on left with border/shadow ---
-        map_target_height = overlay_height - 32
+    col_pad = max(12, int(width * 0.01))
+    min_center_col_w = 120
+    min_map_col_w = int(overlay_height * 0.7)
+    min_weather_col_w = int(overlay_height * 0.5)
+    # For tall images, reduce map/weather columns, give more to center
+    if aspect < 0.7:  # very tall (9:16 or taller)
+        map_col_w = min_map_col_w
+        weather_col_w = min_weather_col_w
+        center_col_w = width - map_col_w - weather_col_w - 2 * col_pad * 2
+        if center_col_w < min_center_col_w:
+            # If still too small, shrink map/weather more
+            shrink = min_center_col_w - center_col_w
+            map_col_w = max(40, map_col_w - shrink // 2)
+            weather_col_w = max(40, weather_col_w - shrink // 2)
+            center_col_w = width - map_col_w - weather_col_w - 2 * col_pad * 2
+    else:
+        map_col_w = int(overlay_height * 1.1)
+        weather_col_w = int(overlay_height * 0.7)
+        center_col_w = width - map_col_w - weather_col_w - 2 * col_pad * 2
+    print(f"[DEBUG] Column widths: map={map_col_w}, center={center_col_w}, weather={weather_col_w}")
+
+    # --- Map (left column, flush left) ---
+    try:
+        map_target_height = overlay_height - 10
         map_target_width = int(map_img.width * (map_target_height / map_img.height))
-        map_resized = map_img.resize((map_target_width, map_target_height), resample=Image.Resampling.LANCZOS)
-        # Add border and shadow
-        border = 5
+        if map_target_width > map_col_w - 8:
+            map_target_width = map_col_w - 8
+            map_target_height = int(map_img.height * (map_target_width / map_img.width))
+        map_resized = map_img.resize((max(1,map_target_width), max(1,map_target_height)), resample=Image.Resampling.LANCZOS)
+        border = 2
         map_box = Image.new("RGBA", (map_target_width + 2*border, map_target_height + 2*border), (0,0,0,0))
-        shadow = Image.new("RGBA", (map_box.width+8, map_box.height+8), (0,0,0,0))
-        shadow_draw = ImageDraw.Draw(shadow)
-        shadow_draw.rounded_rectangle(
-            [(4, 4), (shadow.width-4, shadow.height-4)],
-            radius=18,
-            fill=(0,0,0,80)
-        )
         map_box.paste(map_resized, (border, border), map_resized)
-        shadow.paste(map_box, (4,4), map_box)
-        map_y = (overlay_height - shadow.height) // 2
-        overlay.paste(shadow, (18, map_y), shadow)
-        # --- Weather icon and temp on top right (move left for visibility) ---
-        wx_icon = None
-        wx_icon_size = overlay_height // 3
-        wx_x = width - wx_icon_size - 250  # moved left from -32 to -180
-        wx_y = 18
-        if weather_icon_path and Path(weather_icon_path).exists():
-            wx_icon = Image.open(weather_icon_path).convert("RGBA").resize((wx_icon_size, wx_icon_size))
-            overlay.paste(wx_icon, (wx_x, wx_y), wx_icon)
-        # Temp text
-        font_size_temp = wx_icon_size // 2 + 4
-        try:
-            font_temp = ImageFont.truetype("arial.ttf", font_size_temp)
-        except Exception:
-            font_temp = ImageFont.load_default()
-        temp_color = (255, 255, 255, 240)
-        draw.text((wx_x + wx_icon_size + 12, wx_y + wx_icon_size//4), temp_str, font=font_temp, fill=temp_color)
-        # --- Address, date, time, coords in center ---
-        font_size_addr = max(20, overlay_height // 7)
-        font_size_meta = max(16, overlay_height // 10)
+        map_y = (overlay_height - map_box.height) // 2
+        overlay.paste(map_box, (col_pad, map_y), map_box)
+        print("[DEBUG] Map column drawn (left)")
+    except Exception as e:
+        print(f"[ERROR] Drawing map column failed: {e}")
+
+    # --- Center column: address (word-wrapped), date+time, lat+lon ---
+    try:
+        print("[DEBUG] Center column: loading fonts...")
+        # Reduce font size for very tall images
+        if aspect < 0.7:
+            font_size_addr = max(12, overlay_height // 8)
+            font_size_meta = max(9, overlay_height // 14)
+            addr_line_spacing = 10  # increased spacing
+            meta_spacing = 18       # increased spacing
+        else:
+            font_size_addr = max(16, overlay_height // 6)
+            font_size_meta = max(13, overlay_height // 9)
+            addr_line_spacing = 14  # increased spacing
+            meta_spacing = 24       # increased spacing
         try:
             font_addr = ImageFont.truetype("arialbd.ttf", font_size_addr)
         except Exception:
@@ -134,113 +164,97 @@ def overlay_with_map_and_info(
             font_meta = ImageFont.truetype("arial.ttf", font_size_meta)
         except Exception:
             font_meta = ImageFont.load_default()
-        text_x = shadow.width + 36
-        text_y = 28
-        # Address (bold, wrapped)
-        max_addr_width = width - text_x - 60 - wx_icon_size
-        addr_font_size = font_size_addr
-        addr_font = font_addr
-        # Shrink font if address is too wide
-        while True:
-            bbox = addr_font.getbbox(address)
-            w = bbox[2] - bbox[0]
-            if w <= max_addr_width or addr_font_size <= 14:
-                break
-            addr_font_size -= 2
-            try:
-                addr_font = ImageFont.truetype("arialbd.ttf", addr_font_size)
-            except Exception:
-                addr_font = ImageFont.load_default()
-        y_addr_end = draw_wrapped_text(draw, address, addr_font, text_x, text_y, max_addr_width, (255,255,255,255))
-        # Date/time
-        draw.text((text_x, y_addr_end + 2), f"{date} {time}", font=font_meta, fill=(220,220,220,230))
-        # Lat/lon
-        draw.text((text_x, y_addr_end + 2 + font_size_meta + 6), f"{latitude:.5f}, {longitude:.5f}", font=font_meta, fill=(180,180,180,210))
-        # --- Composite overlay onto image ---
+        print("[DEBUG] Center column: fonts loaded")
+
+        # Address (word-wrapped, with safety)
+        center_x = col_pad + map_col_w + col_pad
+        max_addr_width = center_col_w
+        addr_lines = []
+        words = address.split()
+        word_wrap_safety = 0
+        print(f"[DEBUG] Center column: address split into {len(words)} words")
+        while words and word_wrap_safety < 10:
+            line = ''
+            inner_wrap_safety = 0
+            while words and inner_wrap_safety < 50:
+                test_line = line + ('' if not line else ' ') + words[0]
+                bbox = draw.textbbox((0, 0), test_line, font=font_addr)
+                w = bbox[2] - bbox[0]
+                if w <= max_addr_width:
+                    line = test_line
+                    words.pop(0)
+                else:
+                    break
+                inner_wrap_safety += 1
+            if line:
+                addr_lines.append(line)
+            word_wrap_safety += 1
+        if not addr_lines:
+            addr_lines = [address]
+        print(f"[DEBUG] Center column: address wrapped into {len(addr_lines)} lines")
+        addr_line_height = font_addr.getbbox("A")[3] - font_addr.getbbox("A")[1]
+        addr_block_height = len(addr_lines) * (addr_line_height + addr_line_spacing)
+
+        # Date/time and lat/lon
+        meta_height = font_meta.getbbox("A")[3] - font_meta.getbbox("A")[1]
+        date_time_str = f"{date} {time}"
+        latlon_str = f"{latitude:.5f}, {longitude:.5f}"
+        meta_block_height = meta_height * 2 + meta_spacing
+
+        # Vertical stacking for center column (address, date/time, lat/lon)
+        total_center_height = addr_block_height + meta_block_height + meta_spacing * 2  # extra space between blocks
+        center_y = (overlay_height - total_center_height) // 2
+        y_cursor = center_y
+        # Draw address lines
+        for line in addr_lines:
+            draw.text((center_x, y_cursor), line, font=font_addr, fill=(255,255,255,255))
+            y_cursor += addr_line_height + addr_line_spacing
+        y_cursor += meta_spacing  # extra space before date/time
+        # Draw date/time
+        draw.text((center_x, y_cursor), date_time_str, font=font_meta, fill=(220,220,220,230))
+        y_cursor += meta_height + meta_spacing
+        # Draw lat/lon
+        draw.text((center_x, y_cursor), latlon_str, font=font_meta, fill=(180,180,180,210))
+        print("[DEBUG] Center column drawn")
+    except Exception as e:
+        print(f"[ERROR] Drawing center column failed: {e}")
+
+    # --- Weather (right column) ---
+    print("[DEBUG] Entering weather column block...")
+    try:
+        wx_icon_size = int(weather_col_w * 0.35)
+        wx_x = width - weather_col_w + (weather_col_w - wx_icon_size) // 2 - col_pad
+        wx_y = (overlay_height - wx_icon_size - 12) // 2
+        if weather_icon_path and Path(weather_icon_path).exists():
+            wx_icon = Image.open(weather_icon_path).convert("RGBA").resize((wx_icon_size, wx_icon_size))
+            overlay.paste(wx_icon, (wx_x, wx_y), wx_icon)
+        font_size_temp = max(10, wx_icon_size // 3)
+        try:
+            font_temp = ImageFont.truetype("arial.ttf", font_size_temp)
+        except Exception:
+            font_temp = ImageFont.load_default()
+        temp_color = (255, 255, 255, 230)
+        temp_bbox = font_temp.getbbox(temp_str)
+        temp_width = temp_bbox[2] - temp_bbox[0]
+        temp_x = wx_x + (wx_icon_size - temp_width) // 2
+        temp_y = wx_y + wx_icon_size + 2
+        draw.text((temp_x, temp_y), temp_str, font=font_temp, fill=temp_color)
+        print("[DEBUG] Weather column drawn")
+    except Exception as e:
+        print(f"[ERROR] Drawing weather column failed: {e}")
+
+    # --- Composite overlay onto image ---
+    try:
         out_img = img.convert("RGBA")
         out_img.alpha_composite(overlay, (0, height - overlay_height))
+        print("[DEBUG] Overlay composited onto image")
         return out_img.convert("RGB")
-    else:  # Portrait (9x16, etc)
-        overlay_width = int(width * 0.92)
-        overlay_height = int(height * 0.38)
-        overlay = Image.new("RGBA", (overlay_width, height), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
-        radius = overlay_width // 8
-        draw.rounded_rectangle([(0, height - overlay_height), (overlay_width, height)], radius=radius, fill=(28, 28, 28, 210))
-        # --- Map on top ---
-        map_target_width = overlay_width - 32
-        map_target_height = int(map_img.height * (map_target_width / map_img.width))
-        if map_target_height > overlay_height // 2:
-            map_target_height = overlay_height // 2
-            map_target_width = int(map_img.width * (map_target_height / map_img.height))
-        map_resized = map_img.resize((map_target_width, map_target_height), resample=Image.Resampling.LANCZOS)
-        # Add border and shadow
-        border = 5
-        map_box = Image.new("RGBA", (map_target_width + 2*border, map_target_height + 2*border), (0,0,0,0))
-        shadow = Image.new("RGBA", (map_box.width+8, map_box.height+8), (0,0,0,0))
-        shadow_draw = ImageDraw.Draw(shadow)
-        shadow_draw.rounded_rectangle(
-            [(4, 4), (shadow.width-4, shadow.height-4)],
-            radius=18,
-            fill=(0,0,0,80)
-        )
-        map_box.paste(map_resized, (border, border), map_resized)
-        shadow.paste(map_box, (4,4), map_box)
-        map_x = (overlay_width - shadow.width) // 2
-        overlay.paste(shadow, (map_x, height - overlay_height + 18), shadow)
-        # --- Weather icon and temp below map, centered ---
-        wx_icon = None
-        wx_icon_size = overlay_height // 6
-        wx_x = (overlay_width - wx_icon_size) // 2
-        wx_y = height - overlay_height + 18 + shadow.height + 8
-        if weather_icon_path and Path(weather_icon_path).exists():
-            wx_icon = Image.open(weather_icon_path).convert("RGBA").resize((wx_icon_size, wx_icon_size))
-            overlay.paste(wx_icon, (wx_x, wx_y), wx_icon)
-        # Temp text
-        font_size_temp = wx_icon_size // 2 + 4
-        try:
-            font_temp = ImageFont.truetype("arial.ttf", font_size_temp)
-        except Exception:
-            font_temp = ImageFont.load_default()
-        temp_color = (255, 255, 255, 240)
-        draw.text((wx_x + wx_icon_size + 8, wx_y + wx_icon_size//4), temp_str, font=font_temp, fill=temp_color)
-        # --- Address, date, time, coords below weather ---
-        font_size_addr = max(18, overlay_height // 10)
-        font_size_meta = max(14, overlay_height // 16)
-        try:
-            font_addr = ImageFont.truetype("arialbd.ttf", font_size_addr)
-        except Exception:
-            font_addr = ImageFont.load_default()
-        try:
-            font_meta = ImageFont.truetype("arial.ttf", font_size_meta)
-        except Exception:
-            font_meta = ImageFont.load_default()
-        text_x = 32
-        text_y = wx_y + wx_icon_size + 12
-        max_addr_width = overlay_width - 64
-        addr_font_size = font_size_addr
-        addr_font = font_addr
-        # Shrink font if address is too wide
-        while True:
-            bbox = addr_font.getbbox(address)
-            w = bbox[2] - bbox[0]
-            if w <= max_addr_width or addr_font_size <= 12:
-                break
-            addr_font_size -= 2
-            try:
-                addr_font = ImageFont.truetype("arialbd.ttf", addr_font_size)
-            except Exception:
-                addr_font = ImageFont.load_default()
-        y_addr_end = draw_wrapped_text(draw, address, addr_font, text_x, text_y, max_addr_width, (255,255,255,255))
-        # Date/time
-        draw.text((text_x, y_addr_end + 2), f"{date} {time}", font=font_meta, fill=(220,220,220,230))
-        # Lat/lon
-        draw.text((text_x, y_addr_end + 2 + font_size_meta + 6), f"{latitude:.5f}, {longitude:.5f}", font=font_meta, fill=(180,180,180,210))
-        # --- Composite overlay onto image ---
-        out_img = img.convert("RGBA")
-        out_img.alpha_composite(overlay, (width - overlay_width, 0))
-        return out_img.convert("RGB")
+    except Exception as e:
+        print(f"[ERROR] Compositing overlay failed: {e}")
+        return img
 
+
+# Removed duplicate embed_metadata function to resolve name conflict.
 
 def embed_metadata(input_path: str, output_path: str, latitude: float, longitude: float, date: str, time: str, map_image_path: Optional[str] = None) -> None:
     """
@@ -257,19 +271,18 @@ def embed_metadata(input_path: str, output_path: str, latitude: float, longitude
     except Exception:
         exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
     # GPS
-    def to_deg(value, ref):
+    def to_deg(value):
         deg = int(abs(value))
         min_ = int((abs(value) - deg) * 60)
         sec = float((abs(value) - deg - min_ / 60) * 3600)
         return ((deg, 1), (min_, 1), (int(sec * 100), 100))
     exif_dict['GPS'][piexif.GPSIFD.GPSLatitudeRef] = b'N' if latitude >= 0 else b'S'
-    exif_dict['GPS'][piexif.GPSIFD.GPSLatitude] = to_deg(latitude, 'lat')
+    exif_dict['GPS'][piexif.GPSIFD.GPSLatitude] = to_deg(latitude)
     exif_dict['GPS'][piexif.GPSIFD.GPSLongitudeRef] = b'E' if longitude >= 0 else b'W'
-    exif_dict['GPS'][piexif.GPSIFD.GPSLongitude] = to_deg(longitude, 'lon')
-    # DateTime
-    dt_str = f"{date} {time}"
+    exif_dict['GPS'][piexif.GPSIFD.GPSLongitude] = to_deg(longitude)
     dt_fmt = "%Y-%m-%d %H:%M"
     try:
+        dt_str = f"{date} {time}"
         dt = datetime.strptime(dt_str, dt_fmt)
         dt_bytes = dt.strftime("%Y:%m:%d %H:%M:%S").encode()
         exif_dict['0th'][piexif.ImageIFD.DateTime] = dt_bytes
