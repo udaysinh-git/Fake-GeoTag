@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from .utils import embed_metadata
 from .config import get_settings
+from starlette.background import BackgroundTask
 
 class Runner:
     """Main application runner for the backend API."""
@@ -43,11 +44,19 @@ class Runner:
                 map_img_bytes = temp_map
             try:
                 embed_metadata(temp_input, temp_output, latitude, longitude, date, time, map_img_bytes)
-                return FileResponse(temp_output, filename=file.filename)
+                # Use BackgroundTask to delete output after response is sent
+                def cleanup():
+                    for f in [temp_output]:
+                        if f and os.path.exists(f):
+                            try:
+                                os.remove(f)
+                            except Exception:
+                                pass
+                return FileResponse(temp_output, filename=file.filename, background=BackgroundTask(cleanup))
             except Exception as e:
                 return JSONResponse({"error": str(e)}, status_code=500)
             finally:
-                for f in [temp_input, temp_output, temp_map]:
+                for f in [temp_input, temp_map]:
                     if f and os.path.exists(f):
                         try:
                             os.remove(f)
